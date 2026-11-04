@@ -1,0 +1,40 @@
+# Server for the vLLM-Omni TTS demo. Needs Docker with NVIDIA GPU support.
+#
+# Start:  docker compose up -d      Stop:  docker compose down
+# Reuse an existing HuggingFace cache instead of the named volume:
+#   HF_CACHE=$HOME/.cache/huggingface docker compose up -d
+name: kaspar-tts
+
+services:
+  tts:
+    image: public.ecr.aws/deep-learning-containers/vllm@sha256:7e1f0b3cce437c5d857824de2c47716302143102ce18314acb70e3f9409a19d3
+    container_name: kaspar-tts
+    command:
+      - --model
+      - Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --enforce-eager
+    ipc: host
+    ports:
+      - "127.0.0.1:8091:8000"
+    volumes:
+      - ${HF_CACHE:-hf-cache}:/root/.cache/huggingface
+      - type: bind
+        source: ./patches/gpu_model_runner.py
+        target: /opt/venv/lib64/python3.12/site-packages/vllm_omni/worker/gpu_model_runner.py
+        read_only: true
+        bind:
+          create_host_path: false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf-cache:
