@@ -1,0 +1,11 @@
+--- a/vllm_omni/worker/gpu_model_runner.py
++++ b/vllm_omni/worker/gpu_model_runner.py
+@@ -1740,6 +1740,8 @@
+                     )
+ 
+                 offsets_t = torch.tensor(start_offsets_b, device=req_embeds.device, dtype=torch.long)
++                if req_embeds.dtype != inputs_embeds.dtype:
++                    req_embeds = req_embeds.to(dtype=inputs_embeds.dtype)
+                 inputs_embeds.index_copy_(0, offsets_t, req_embeds)
+                 preprocess_input_ids.index_copy_(
+                     0,
