@@ -1,2 +1,4 @@
 def main() -> None:
-    print("Hello from demo-tts!")
+    from .app import main as run
+
+    run()
