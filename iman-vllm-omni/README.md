@@ -30,7 +30,7 @@ flowchart TB
         SPEAKER["Speaker"]
 
         CONFIG["Shared .env<br/>TTS_MODEL, TTS_PORT"]
-        DEPS["pyproject.toml + uv.lock<br/>openai dependency<br/>.python-version 3.13"]
+        DEPS["pyproject.toml + uv.lock<br/>openai + python-dotenv<br/>.python-version 3.13"]
 
         MAIN --> GEN --> SDK --> REQ
         SAVE --> WAV --> PLAY --> SPEAKER
@@ -41,7 +41,7 @@ flowchart TB
     subgraph SERVER["Server (WSL2 + Docker, NVIDIA GPU): server/, container kaspar-tts"]
         API["vLLM-Omni speech API<br/>container port TTS_SERVER_PORT"]
         ENGINE["OmniGPUModelRunner<br/>(other internals omitted)"]
-        MODEL[("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice<br/>HuggingFace cache volume")]
+        MODEL[("TTS_MODEL from .env<br/>HuggingFace cache volume")]
         AUDIO["Generated audio<br/>WAV response"]
         PATCH["server/patches/gpu_model_runner.py<br/>bind-mounted read-only<br/>casts embeds to matching dtype"]
 
@@ -61,40 +61,82 @@ looked at, the rest of vLLM-Omni is not drawn.
 
 ## Running it
 
-From `iman-vllm-omni/`, copy `.env.example` to `.env` once (`Copy-Item .env.example .env` in PowerShell, or `cp .env.example .env` on Linux).
+Requirements: Windows for the client (`winsound`), `uv` with Python 3.13 or
+newer, and Docker Desktop with WSL2 and NVIDIA GPU support for the server.
+Run the demo commands below from `iman-vllm-omni/`, not the enclosing repository.
 
-Edit `TTS_MODEL` and `TTS_PORT` in this shared file to configure both client and server. `TTS_SERVER_PORT` controls the container's listening port; `TTS_PORT` is the host port the client connects to. The client resolves `.env` relative to its source location, not the current directory. Shell environment variables override `.env` in both tools. Restart the server and client after changing settings. `.env` is ignored by Git; `.env.example` documents the initial values.
+### Shared configuration
 
-Start the server (needs Docker and an NVIDIA GPU):
+Copy the template once in PowerShell (keep an existing `.env`):
 
+```powershell
+Copy-Item .env.example .env
 ```
-cd server
-docker compose --env-file ../.env up -d
-docker compose --env-file ../.env logs -f
+
+| Setting | Initial value | Used by |
+| --- | --- | --- |
+| `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` | Server model and client requests |
+| `TTS_PORT` | `8091` | Published host port and client URL |
+| `TTS_SERVER_PORT` | `8000` | Container listener and port mapping |
+
+Both sides use this one `.env`. The client finds it relative to its source,
+regardless of the current directory. Shell environment variables override file
+values in both tools. Restart the client and recreate the server with the `up -d`
+command after changing settings. `.env` is ignored by Git; `.env.example` is the
+tracked template. Changing `TTS_MODEL` does not guarantee another model supports
+this client's fixed `ryan` voice or the pinned server image.
+
+### Start the server
+
+In a terminal at `iman-vllm-omni/`:
+
+```powershell
+docker compose --env-file .env -f server/compose.yaml up -d
+docker compose --env-file .env -f server/compose.yaml logs -f
 ```
 
-The first start downloads the model, so give it a few minutes. When the log says the
-server is listening, check it with `curl http://127.0.0.1:8091/v1/models` (replace `8091` if you changed `TTS_PORT`). Stop it with
-`docker compose --env-file ../.env down`.
+The first start downloads the model and initializes the engine. A running
+container alone does not mean the API is ready. Wait for `Application startup
+complete` in the logs. In another PowerShell terminal, check the API (use your
+`TTS_PORT` value if you changed the initial port):
 
-The port is only bound to 127.0.0.1. If you already have a HuggingFace cache you can
-reuse it instead of the named volume:
-`HF_CACHE=$HOME/.cache/huggingface docker compose --env-file ../.env up -d`.
+```powershell
+Invoke-RestMethod http://127.0.0.1:8091/v1/models
+```
 
-The image is pinned by digest, it was the `omni-cuda` tag when this was set up:
+The first speech request can also take longer while inference kernels compile.
+The server is bound only to `127.0.0.1` and has no authentication.
+
+The image is pinned by digest; it was the `omni-cuda` tag when this was set up:
 `public.ecr.aws/deep-learning-containers/vllm@sha256:7e1f0b3cce437c5d857824de2c47716302143102ce18314acb70e3f9409a19d3`
 
-Then the client:
+The default cache is a named Docker volume. To reuse an existing HuggingFace
+cache, set `HF_CACHE` in the shared `.env` to a host directory Docker can access.
 
-```
+### Start the client
+
+In another terminal, start at `iman-vllm-omni/`:
+
+```powershell
 cd client
-uv sync
+uv sync --locked
 uv run demo-tts
 ```
 
-`uv run python main.py` also works through the root wrapper; both commands run the same client implementation.
+`uv run python main.py` is an alternative; both commands run the same client.
+Type a sentence to generate and play `client/output/speech.wav`. Each successful
+request replaces this file. Type `exit` to quit.
 
-Type a sentence, the audio is saved to `output/speech.wav` and played.
+If the client reports `Connection error`, check the API command above, the server
+logs, and that both terminals use the same `TTS_PORT` (including any shell override).
+
+### Stop the server
+
+From `iman-vllm-omni/`:
+
+```powershell
+docker compose --env-file .env -f server/compose.yaml down
+```
 
 ## The patch
 
